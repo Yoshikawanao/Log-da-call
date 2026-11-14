@@ -128,7 +128,27 @@ let grupoAtualId = null;
 let cancelaGrupos = null;   // função para parar de ouvir os grupos
 const cachePerfis = {};     // uid -> {nome, email}
 
+// Se algo falhar ao iniciar, mostra o motivo na tela em vez de deixá-la vazia
+function mostraFalha(msg) {
+  const el = $("carregando");
+  if (el && !el.hidden) {
+    el.textContent = msg;
+  }
+}
+
+window.addEventListener("error", (ev) => {
+  mostraFalha("Erro ao iniciar: " + ev.message + " (abra o console com F12 para ver mais detalhes)");
+});
+
+setTimeout(() => {
+  mostraFalha(
+    "Não foi possível conectar ao Firebase. Confira o arquivo firebase-config.js, " +
+    "se o domínio está autorizado em Authentication e abra o console (F12) para ver o erro."
+  );
+}, 8000);
+
 auth.onAuthStateChanged(async (u) => {
+  $("carregando").hidden = true;
   usuario = u;
 
   if (!u) {
