@@ -1,6 +1,6 @@
 // Cole aqui a configuração do seu app web do Firebase
 // (Configurações do projeto > Seus apps > App da Web > "firebaseConfig")
-export const firebaseConfig = {
+const firebaseConfig = {
   apiKey: "AIzaSyDmncXLrswtLgLhS3u_O6Njjsc4WoqpsAo",
   authDomain: "log-da-call.firebaseapp.com",
   projectId: "log-da-call",
