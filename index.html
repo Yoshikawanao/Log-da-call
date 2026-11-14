@@ -69,6 +69,16 @@
     </div>
   </div>
 
+  <dialog id="dlg-hora" class="dialogo">
+    <h3 id="dlg-titulo"></h3>
+    <input id="dlg-input" type="datetime-local">
+    <div class="dlg-acoes">
+      <button id="dlg-limpar" class="btn-sec" type="button" hidden>Deixar em andamento</button>
+      <button id="dlg-cancelar" class="btn-sec" type="button">Cancelar</button>
+      <button id="dlg-ok" class="btn-principal" type="button">Salvar</button>
+    </div>
+  </dialog>
+
   <p id="aviso" class="aviso" role="status" hidden></p>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
