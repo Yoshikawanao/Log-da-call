@@ -25,9 +25,22 @@
       </div>
 
       <div id="form-auth" class="form">
-        <label id="campo-nome" hidden>Nome (como seus amigos te chamam)
-          <input id="auth-nome" type="text" maxlength="30" autocomplete="nickname">
-        </label>
+        <div id="campo-nome" class="form" hidden>
+          <div class="foto-campo">
+            <span id="cad-prev"></span>
+            <div class="foto-botoes">
+              <button id="cad-escolher" class="btn-sec" type="button">Escolher foto (opcional)</button>
+              <button id="cad-remover" class="btn-sec" type="button" hidden>Remover foto</button>
+            </div>
+            <input id="cad-arquivo" type="file" accept="image/*" hidden>
+          </div>
+          <label>Nome (como seus amigos te chamam)
+            <input id="auth-nome" type="text" maxlength="30" autocomplete="nickname">
+          </label>
+          <label>Nome de usuário (seus amigos te encontram por ele)
+            <input id="auth-usuario" type="text" maxlength="20" autocapitalize="none" autocomplete="off" placeholder="ex.: joao_silva">
+          </label>
+        </div>
         <label>E-mail
           <input id="auth-email" type="email" autocomplete="email">
         </label>
@@ -46,13 +59,21 @@
     <header class="topo">
       <strong class="marca">Diário de Calls</strong>
       <div class="topo-direita">
-        <span id="nome-usuario"></span>
+        <button id="btn-perfil" class="btn-perfil" type="button" title="Editar meu perfil">
+          <span id="avatar-topo"></span>
+          <span id="nome-usuario"></span>
+        </button>
         <button id="btn-sair" class="btn-sec" type="button">Sair</button>
       </div>
     </header>
 
     <div class="layout">
       <aside class="lateral">
+        <button id="btn-amigos" class="nav-amigos" type="button">
+          <span>Amigos</span>
+          <span id="badge-pedidos" class="selo" hidden></span>
+        </button>
+
         <h2>Seus grupos</h2>
         <ul id="lista-grupos" class="lista-grupos"></ul>
         <p id="sem-grupos" class="vazio" hidden>Você ainda não está em nenhum grupo. Crie o primeiro abaixo.</p>
@@ -76,6 +97,33 @@
       <button id="dlg-limpar" class="btn-sec" type="button" hidden>Deixar em andamento</button>
       <button id="dlg-cancelar" class="btn-sec" type="button">Cancelar</button>
       <button id="dlg-ok" class="btn-principal" type="button">Salvar</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-perfil" class="dialogo">
+    <h3 id="perfil-titulo">Meu perfil</h3>
+    <p id="perfil-obs" class="vazio" hidden>Para seus amigos te encontrarem, escolha um nome de usuário.</p>
+    <div class="foto-campo">
+      <span id="perfil-prev"></span>
+      <div class="foto-botoes">
+        <button id="perfil-escolher" class="btn-sec" type="button">Escolher foto</button>
+        <button id="perfil-remover" class="btn-sec" type="button" hidden>Remover foto</button>
+      </div>
+      <input id="perfil-arquivo" type="file" accept="image/*" hidden>
+    </div>
+    <div class="form">
+      <label>Nome
+        <input id="perfil-nome" type="text" maxlength="30">
+      </label>
+      <label>Nome de usuário
+        <input id="perfil-usuario" type="text" maxlength="20" autocapitalize="none" autocomplete="off" placeholder="ex.: joao_silva">
+        <span id="perfil-usuario-dica" class="suave"></span>
+      </label>
+      <p id="perfil-erro" class="erro" role="alert"></p>
+    </div>
+    <div class="dlg-acoes">
+      <button id="perfil-cancelar" class="btn-sec" type="button">Cancelar</button>
+      <button id="perfil-salvar" class="btn-principal" type="button">Salvar</button>
     </div>
   </dialog>
 

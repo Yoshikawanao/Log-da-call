@@ -390,6 +390,62 @@ select, textarea {
 .dialogo input { width: 100%; margin: 12px 0 16px; color-scheme: dark; }
 .dlg-acoes { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
+/* ---------- Perfil, fotos e amigos ---------- */
+.avatar {
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  font-family: "Bricolage Grotesque", "DM Sans", sans-serif;
+  font-weight: 700;
+}
+
+.av-p { width: 26px; height: 26px; font-size: 0.7rem; }
+.av-m { width: 40px; height: 40px; font-size: 0.95rem; }
+.av-g { width: 88px; height: 88px; font-size: 1.9rem; }
+
+.btn-perfil {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  padding: 3px 14px 3px 4px;
+  color: var(--texto);
+  cursor: pointer;
+}
+
+.btn-perfil:hover { border-color: var(--linha); background: var(--painel-2); }
+
+.nav-amigos {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: var(--painel);
+  border: 1px solid var(--linha);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.nav-amigos:hover { background: var(--painel-2); }
+.nav-amigos.ativo { background: var(--painel-2); border-color: var(--destaque); }
+
+.foto-campo { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+.foto-botoes { display: grid; gap: 6px; }
+
+.linha-nome { display: flex; align-items: center; gap: 8px; }
+.momento-meta .avatar { margin-right: -4px; }
+
+.dialogo { max-height: 92vh; overflow-y: auto; }
+.dialogo .form input { margin: 0; width: 100%; }
+.dialogo .form input:disabled { opacity: 0.6; }
+
 /* ---------- Celular ---------- */
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; }

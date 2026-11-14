@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 function esc(texto) {
   const d = document.createElement("div");
   d.textContent = texto == null ? "" : String(texto);
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 let avisoTimer = null;
@@ -86,6 +86,63 @@ function paraInput(ms) {
 }
 
 // ============================================================
+// AVATARES E FOTOS
+// ============================================================
+const REGEX_USUARIO = /^[a-z0-9_]{3,20}$/;
+const MSG_USUARIO = "O nome de usuário precisa ter de 3 a 20 caracteres: letras minúsculas, números ou _.";
+
+function iniciais(nome) {
+  const partes = String(nome || "?").trim().split(/\s+/).slice(0, 2);
+  return partes.map((x) => x[0] || "").join("").toUpperCase() || "?";
+}
+
+function corDe(texto) {
+  let h = 0;
+  for (const ch of String(texto)) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+// Círculo com a foto (ou as iniciais). tam: "p" pequeno, "m" médio, "g" grande
+function htmlAvatar(foto, nome, tam) {
+  if (foto && String(foto).startsWith("data:image/")) {
+    return `<img class="avatar av-${tam}" src="${esc(foto)}" alt="">`;
+  }
+  return `<span class="avatar av-${tam} sem-foto" style="background:hsl(${corDe(nome)} 40% 32%)" aria-hidden="true">${esc(iniciais(nome))}</span>`;
+}
+
+function avatar(uid, tam) {
+  const pf = cachePerfis[uid];
+  return htmlAvatar(pf && pf.foto, nomeDe(uid), tam || "p");
+}
+
+// Corta no centro, reduz para 160x160 e devolve um texto pequeno (JPEG) que cabe no Firestore
+function lerFoto(arquivo) {
+  return new Promise((resolve, reject) => {
+    if (!arquivo || !arquivo.type.startsWith("image/")) {
+      reject(falha("Escolha um arquivo de imagem."));
+      return;
+    }
+    const url = URL.createObjectURL(arquivo);
+    const img = new Image();
+    img.onload = () => {
+      const t = 160;
+      const c = document.createElement("canvas");
+      c.width = t;
+      c.height = t;
+      const lado = Math.min(img.width, img.height);
+      c.getContext("2d").drawImage(img, (img.width - lado) / 2, (img.height - lado) / 2, lado, lado, 0, 0, t, t);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", 0.82));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(falha("Não consegui abrir essa imagem. Tente uma foto em JPG ou PNG."));
+    };
+    img.src = url;
+  });
+}
+
+// ============================================================
 // LOGIN / CADASTRO
 // ============================================================
 let modoCriar = false;
@@ -104,35 +161,74 @@ function trocarModo(criar) {
 $("aba-entrar").onclick = () => trocarModo(false);
 $("aba-criar").onclick = () => trocarModo(true);
 
+let fotoCadastro = null;
+
+function pintaFotoCadastro() {
+  $("cad-prev").innerHTML = htmlAvatar(fotoCadastro, $("auth-nome").value.trim() || "?", "g");
+  $("cad-remover").hidden = !fotoCadastro;
+}
+
+$("cad-escolher").onclick = () => $("cad-arquivo").click();
+$("cad-arquivo").onchange = async (ev) => {
+  const arq = ev.target.files[0];
+  ev.target.value = "";
+  if (!arq) return;
+  try {
+    fotoCadastro = await lerFoto(arq);
+    pintaFotoCadastro();
+  } catch (e) {
+    $("auth-erro").textContent = traduzErro(e);
+  }
+};
+$("cad-remover").onclick = () => {
+  fotoCadastro = null;
+  pintaFotoCadastro();
+};
+$("auth-nome").addEventListener("input", () => {
+  if (!fotoCadastro) pintaFotoCadastro();
+});
+pintaFotoCadastro();
+
 async function enviarAuth() {
   const email = $("auth-email").value.trim();
   const senha = $("auth-senha").value;
   const nome = $("auth-nome").value.trim();
+  const handle = $("auth-usuario").value.trim().toLowerCase().replace(/^@/, "");
   const btn = $("btn-auth");
   $("auth-erro").textContent = "";
 
-  if (modoCriar && !nome) {
-    $("auth-erro").textContent = "Digite seu nome.";
-    return;
+  if (modoCriar) {
+    if (!nome) {
+      $("auth-erro").textContent = "Digite seu nome.";
+      return;
+    }
+    if (!REGEX_USUARIO.test(handle)) {
+      $("auth-erro").textContent = MSG_USUARIO;
+      return;
+    }
   }
 
   btn.disabled = true;
   try {
     if (modoCriar) {
-      criandoConta = true; // evita que o perfil seja criado duas vezes com nomes diferentes
+      const existe = await db.collection("usernames").doc(handle).get();
+      if (existe.exists) throw falha("Esse nome de usuário já está em uso. Escolha outro.");
+
+      criandoConta = true; // evita que o perfil seja tratado antes de terminarmos
       const cred = await auth.createUserWithEmailAndPassword(email, senha);
-      await cred.user.updateProfile({ displayName: nome });
-      await db.collection("users").doc(cred.user.uid).set({
-        nome,
-        email,
-        emailLower: email.toLowerCase(),
-        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      cachePerfis[cred.user.uid] = { nome, email };
-      usuarioNome = nome;
-      $("nome-usuario").textContent = nome;
+      try {
+        await cred.user.updateProfile({ displayName: nome });
+        const dados = { nome, criadoEm: firebase.firestore.FieldValue.serverTimestamp() };
+        if (fotoCadastro) dados.foto = fotoCadastro;
+        await reservaUsuario(cred.user.uid, handle, dados);
+      } catch (e) {
+        console.error(e);
+        aviso(traduzErro(e));
+      }
       criandoConta = false;
-      renderGrupoAtual();
+      await garantePerfil(); // se algo falhou acima, pede para completar o perfil
+      fotoCadastro = null;
+      pintaFotoCadastro();
     } else {
       await auth.signInWithEmailAndPassword(email, senha);
     }
@@ -145,7 +241,7 @@ async function enviarAuth() {
 }
 
 $("btn-auth").onclick = enviarAuth;
-["auth-nome", "auth-email", "auth-senha"].forEach((id) =>
+["auth-nome", "auth-usuario", "auth-email", "auth-senha"].forEach((id) =>
   $(id).addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") enviarAuth();
   })
@@ -181,7 +277,13 @@ let calls = [];
 let cancelaGrupos = null;
 let cancelaCalls = null;
 let tokenRender = 0;
-const cachePerfis = {}; // uid -> { nome, email }
+const cachePerfis = {}; // uid -> { nome, usuario, foto }
+const cacheEm = {}; // uid -> quando o perfil foi carregado
+let amizades = [];
+let pedidosRec = [];
+let pedidosEnv = [];
+let mostrandoAmigos = false;
+let cancelaSociais = [];
 
 // Se algo falhar ao iniciar, mostra o motivo na tela em vez de deixá-la vazia
 function mostraFalha(msg) {
@@ -207,12 +309,15 @@ auth.onAuthStateChanged(async (u) => {
   if (!u) {
     if (cancelaGrupos) cancelaGrupos();
     if (cancelaCalls) cancelaCalls();
+    pararSociais();
     cancelaGrupos = null;
     cancelaCalls = null;
     grupos = [];
     calls = [];
     grupoAtualId = null;
     callAtualId = null;
+    mostrandoAmigos = false;
+    Object.keys(cachePerfis).forEach((k) => delete cachePerfis[k]);
     $("tela-app").hidden = true;
     $("tela-auth").hidden = false;
     return;
@@ -222,34 +327,11 @@ auth.onAuthStateChanged(async (u) => {
   $("tela-app").hidden = false;
 
   usuarioNome = u.displayName || u.email;
-  $("nome-usuario").textContent = usuarioNome;
-
-  if (!criandoConta) {
-    try {
-      const ref = db.collection("users").doc(u.uid);
-      const snap = await ref.get();
-      if (snap.exists) {
-        cachePerfis[u.uid] = snap.data();
-        if (snap.data().nome) {
-          usuarioNome = snap.data().nome;
-          $("nome-usuario").textContent = usuarioNome;
-        }
-      } else {
-        const perfil = {
-          nome: usuarioNome,
-          email: u.email,
-          emailLower: (u.email || "").toLowerCase(),
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        };
-        await ref.set(perfil);
-        cachePerfis[u.uid] = { nome: perfil.nome, email: perfil.email };
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
+  atualizaTopo();
 
   ouvirGrupos();
+  ouvirSociais();
+  if (!criandoConta) await garantePerfil();
 });
 
 // ============================================================
@@ -280,15 +362,16 @@ function renderGrupos() {
   const ul = $("lista-grupos");
   ul.innerHTML = "";
   $("sem-grupos").hidden = grupos.length > 0;
+  $("btn-amigos").classList.toggle("ativo", mostrandoAmigos);
 
   grupos.forEach((g) => {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = g.nome;
-    if (g.id === grupoAtualId) btn.classList.add("ativo");
+    if (g.id === grupoAtualId && !mostrandoAmigos) btn.classList.add("ativo");
     btn.onclick = () => {
-      if (g.id !== grupoAtualId) selecionarGrupo(g.id);
+      if (g.id !== grupoAtualId || mostrandoAmigos) selecionarGrupo(g.id);
       if (window.innerWidth <= 760) {
         $("conteudo").scrollIntoView({ behavior: "smooth" });
       }
@@ -305,6 +388,7 @@ function selecionarGrupo(id) {
     cancelaCalls = null;
   }
   grupoAtualId = id;
+  mostrandoAmigos = false;
   callAtualId = null;
   abaGrupo = "calls";
   calls = [];
@@ -368,15 +452,19 @@ $("novo-grupo-nome").addEventListener("keydown", (ev) => {
 // PERFIS
 // ============================================================
 async function carregaPerfis(uids) {
-  const faltando = uids.filter((uid) => !cachePerfis[uid]);
+  const agora = Date.now();
+  const faltando = [...new Set(uids)].filter(
+    (uid) => !cachePerfis[uid] || agora - (cacheEm[uid] || 0) > 300000
+  );
   await Promise.all(
     faltando.map(async (uid) => {
       try {
         const snap = await db.collection("users").doc(uid).get();
-        cachePerfis[uid] = snap.exists ? snap.data() : { nome: "Usuário", email: "" };
+        cachePerfis[uid] = snap.exists ? snap.data() : { nome: "Usuário" };
       } catch (e) {
-        cachePerfis[uid] = { nome: "Usuário", email: "" };
+        cachePerfis[uid] = cachePerfis[uid] || { nome: "Usuário" };
       }
+      cacheEm[uid] = agora;
     })
   );
 }
@@ -390,7 +478,7 @@ function nomeDe(uid) {
 // ============================================================
 // RENDERIZAÇÃO DA ÁREA PRINCIPAL
 // ============================================================
-const IDS_RASCUNHO = ["novo-momento", "novo-jogo", "call-titulo", "sel-membro", "add-email"];
+const IDS_RASCUNHO = ["novo-momento", "novo-jogo", "call-titulo", "sel-membro", "amigo-usuario"];
 
 // Guarda o que a pessoa estava digitando, para não perder quando outro amigo editar a call
 function guardaRascunho() {
@@ -431,12 +519,19 @@ async function renderGrupoAtual() {
   const area = $("conteudo");
   const grupo = grupos.find((g) => g.id === grupoAtualId);
 
-  if (!grupo) {
-    area.innerHTML = '<p class="vazio">Escolha um grupo para ver as calls.</p>';
+  if (mostrandoAmigos) {
+    await carregaPerfis([usuario.uid, ...uidsSociais()]);
+    if (meu !== tokenRender) return;
+    pintar(htmlAmigos());
     return;
   }
 
-  await carregaPerfis(grupo.memberIds);
+  if (!grupo) {
+    area.innerHTML = '<p class="vazio">Escolha um grupo para ver as calls, ou abra a lista de amigos.</p>';
+    return;
+  }
+
+  await carregaPerfis([...grupo.memberIds, ...amigosUids()]);
   if (meu !== tokenRender) return; // chegou uma atualização mais nova
 
   let html = "";
@@ -447,9 +542,14 @@ async function renderGrupoAtual() {
   }
   if (!html) html = htmlGrupo(grupo);
 
+  pintar(html);
+}
+
+// Troca o conteúdo mantendo o que a pessoa estava digitando e a posição da rolagem
+function pintar(html) {
   const rascunho = guardaRascunho();
   const y = window.scrollY;
-  area.innerHTML = html;
+  $("conteudo").innerHTML = html;
   restauraRascunho(rascunho);
   window.scrollTo(0, y);
 }
@@ -513,45 +613,97 @@ function htmlListaCalls() {
     <ul class="lista-calls">${cards}</ul>`;
 }
 
-// ---------- Aba Membros ----------
+// ---------- Membros do grupo ----------
+function linhaPessoa(uid, acoes) {
+  const pf = cachePerfis[uid] || {};
+  return `
+    <li class="membro">
+      ${avatar(uid, "m")}
+      <div class="info">
+        <div>${esc(nomeDe(uid))}${usuario && uid === usuario.uid ? " (você)" : ""}</div>
+        <div class="email">${pf.usuario ? "@" + esc(pf.usuario) : ""}</div>
+      </div>
+      ${acoes || ""}
+    </li>`;
+}
+
 function htmlMembros(grupo) {
   const souDono = grupo.ownerId === usuario.uid;
 
   const itens = grupo.memberIds
     .map((uid) => {
-      const p = cachePerfis[uid] || { nome: "Usuário", email: "" };
-      const ehDono = uid === grupo.ownerId;
-      let acao = "";
-      if (souDono && uid !== usuario.uid) {
-        acao = `<button class="btn-sec btn-perigo" data-acao="remover-membro" data-id="${esc(uid)}" type="button">Remover</button>`;
-      }
-      return `
-        <li class="membro">
-          <div class="info">
-            <div>${esc(p.nome)}${uid === usuario.uid ? " (você)" : ""}</div>
-            <div class="email">${esc(p.email)}</div>
-          </div>
-          ${ehDono ? '<span class="selo">Dono</span>' : ""}
-          ${acao}
-        </li>`;
+      const dono = uid === grupo.ownerId ? '<span class="selo">Dono</span>' : "";
+      const remover =
+        souDono && uid !== usuario.uid
+          ? `<button class="btn-sec btn-perigo" data-acao="remover-membro" data-id="${esc(uid)}" type="button">Remover</button>`
+          : "";
+      return linhaPessoa(uid, dono + remover);
     })
     .join("");
+
+  let rodape;
+  if (souDono) {
+    const candidatos = amigosUids().filter((uid) => !grupo.memberIds.includes(uid));
+    const linhas = candidatos
+      .map((uid) =>
+        linhaPessoa(uid, `<button class="btn-principal" data-acao="add-membro" data-id="${esc(uid)}" type="button">Adicionar</button>`)
+      )
+      .join("");
+    let conteudo;
+    if (linhas) conteudo = `<ul class="membros">${linhas}</ul>`;
+    else if (amigosUids().length) conteudo = '<p class="vazio">Todos os seus amigos já estão neste grupo.</p>';
+    else conteudo = '<p class="vazio">Você ainda não tem amigos. Adicione pelo botão Amigos e eles aparecem aqui.</p>';
+    rodape = `<h3>Adicionar amigos ao grupo</h3>${conteudo}`;
+  } else {
+    rodape = `<h3>Sair do grupo</h3>
+      <button class="btn-sec btn-perigo" data-acao="sair-grupo" type="button">Sair deste grupo</button>`;
+  }
 
   return `
     <p class="vazio">${grupo.memberIds.length} ${grupo.memberIds.length === 1 ? "membro" : "membros"}</p>
     <ul class="membros">${itens}</ul>
+    ${rodape}`;
+}
 
-    ${
-      souDono
-        ? `<h3>Adicionar pessoa</h3>
-           <div class="add-membro">
-             <input id="add-email" type="email" placeholder="E-mail da conta do seu amigo">
-             <button class="btn-principal" data-acao="add-membro" type="button">Adicionar</button>
-           </div>
-           <p class="vazio">Seu amigo precisa criar uma conta no site antes de ser adicionado.</p>`
-        : `<h3>Sair do grupo</h3>
-           <button class="btn-sec btn-perigo" data-acao="sair-grupo" type="button">Sair deste grupo</button>`
-    }
+// ---------- Tela de amigos ----------
+function htmlAmigos() {
+  const eu = cachePerfis[usuario.uid] || {};
+  const botao = (acao, id, texto, classe) =>
+    `<button class="${classe}" data-acao="${acao}" data-id="${esc(id)}" type="button">${texto}</button>`;
+
+  const rec = pedidosRec
+    .map((pd) =>
+      linhaPessoa(
+        pd.de,
+        botao("aceitar-pedido", pd.id, "Aceitar", "btn-principal") + botao("recusar-pedido", pd.id, "Recusar", "btn-sec")
+      )
+    )
+    .join("");
+
+  const env = pedidosEnv
+    .map((pd) => linhaPessoa(pd.para, botao("cancelar-pedido", pd.id, "Cancelar pedido", "btn-sec")))
+    .join("");
+
+  const ams = amigosUids()
+    .sort((a, b) => nomeDe(a).localeCompare(nomeDe(b), "pt-BR"))
+    .map((uid) => linhaPessoa(uid, botao("remover-amigo", uid, "Remover", "btn-sec btn-perigo")))
+    .join("");
+
+  return `
+    <h2>Amigos</h2>
+    <p class="vazio">Seu nome de usuário é <strong>@${esc(eu.usuario || "")}</strong>. Passe para seus amigos te encontrarem.</p>
+
+    <h3>Adicionar amigo</h3>
+    <div class="add-membro">
+      <input id="amigo-usuario" type="text" maxlength="21" autocapitalize="none" autocomplete="off" placeholder="Nome de usuário, ex.: joao_silva">
+      <button class="btn-principal" data-acao="enviar-pedido" type="button">Enviar pedido</button>
+    </div>
+
+    ${rec ? `<h3>Pedidos recebidos</h3><ul class="membros">${rec}</ul>` : ""}
+    ${env ? `<h3>Pedidos enviados</h3><ul class="membros">${env}</ul>` : ""}
+
+    <h3>Seus amigos</h3>
+    ${ams ? `<ul class="membros">${ams}</ul>` : '<p class="vazio">Você ainda não tem amigos adicionados.</p>'}
   `;
 }
 
@@ -591,7 +743,7 @@ function htmlCall(grupo, c) {
       const dur = (s.saiu == null ? agora : s.saiu) - s.entrou;
       return `
       <li class="linha">
-        <div class="linha-nome">${esc(s.nome)}</div>
+        <div class="linha-nome">${avatar(s.uid, "p")}<span>${esc(s.nome)}</span></div>
         <div class="linha-info">
           ${hora("ed-entrou", s.id, s.entrou)} até
           ${s.saiu == null ? '<span class="selo">na call</span>' : hora("ed-saiu", s.id, s.saiu)}
@@ -657,7 +809,7 @@ function htmlCall(grupo, c) {
       (m) => `
       <li class="momento">
         <div class="momento-meta">
-          <strong>${esc(m.autorNome)}</strong>
+          ${avatar(m.autorId, "p")}<strong>${esc(m.autorNome)}</strong>
           <span class="suave">${fmtQuando(m.quando, c.inicio)}</span>
           ${
             m.autorId === usuario.uid
@@ -957,38 +1109,14 @@ function editarHoraItem(campoLista, id, campoHora, titulo, ehFim) {
 }
 
 // ---------- Membros do grupo ----------
-async function adicionarMembro(grupo) {
-  const input = $("add-email");
-  const email = input.value.trim().toLowerCase();
-  if (!email) {
-    aviso("Digite o e-mail da pessoa.");
-    return;
-  }
+async function adicionarMembro(grupo, uid) {
+  if (!uid || grupo.memberIds.includes(uid)) return;
   try {
-    const res = await db
-      .collection("users")
-      .where("emailLower", "==", email)
-      .limit(1)
-      .get();
-
-    if (res.empty) {
-      aviso("Nenhuma conta encontrada com esse e-mail. Peça para a pessoa criar a conta primeiro.");
-      return;
-    }
-
-    const uid = res.docs[0].id;
-    if (grupo.memberIds.includes(uid)) {
-      aviso("Essa pessoa já está no grupo.");
-      return;
-    }
-
-    cachePerfis[uid] = res.docs[0].data();
     await db
       .collection("groups")
       .doc(grupo.id)
       .update({ memberIds: firebase.firestore.FieldValue.arrayUnion(uid) });
-    input.value = "";
-    aviso(`${cachePerfis[uid].nome} foi adicionado(a) ao grupo.`);
+    aviso(`${nomeDe(uid)} foi adicionado(a) ao grupo.`);
   } catch (e) {
     aviso(traduzErro(e));
   }
@@ -1066,9 +1194,15 @@ $("conteudo").addEventListener("click", (ev) => {
     case "ed-jogo-ini": editarHoraItem("jogos", id, "inicio", "Horário em que começou o jogo", false); break;
     case "ed-jogo-fim": editarHoraItem("jogos", id, "fim", "Horário em que parou o jogo", true); break;
 
-    case "add-membro": if (grupo) adicionarMembro(grupo); break;
+    case "add-membro": if (grupo) adicionarMembro(grupo, id); break;
     case "remover-membro": if (grupo) removerMembro(grupo, id); break;
     case "sair-grupo": if (grupo) sairDoGrupo(grupo); break;
+
+    case "enviar-pedido": enviarPedido(); break;
+    case "aceitar-pedido": aceitarPedido(id); break;
+    case "recusar-pedido": apagarPedido(id, "Pedido recusado."); break;
+    case "cancelar-pedido": apagarPedido(id, "Pedido cancelado."); break;
+    case "remover-amigo": removerAmigo(id); break;
   }
 });
 
@@ -1081,9 +1215,8 @@ $("conteudo").addEventListener("keydown", (ev) => {
   } else if (alvo === "novo-momento" && (ev.ctrlKey || ev.metaKey)) {
     ev.preventDefault();
     adicionarMomento();
-  } else if (alvo === "add-email") {
-    const grupo = grupos.find((g) => g.id === grupoAtualId);
-    if (grupo) adicionarMembro(grupo);
+  } else if (alvo === "amigo-usuario") {
+    enviarPedido();
   } else if (alvo === "call-titulo") {
     ev.target.blur();
   }
@@ -1106,3 +1239,288 @@ setInterval(() => {
     el.textContent = fmtDur(Date.now() - Number(el.dataset.vivo));
   });
 }, 30000);
+
+
+// ============================================================
+// PERFIL (nome de usuário, nome e foto)
+// ============================================================
+function guardaPerfil(uid, dados) {
+  cachePerfis[uid] = dados;
+  cacheEm[uid] = Date.now();
+  if (usuario && uid === usuario.uid) {
+    usuarioNome = dados.nome || usuarioNome;
+    atualizaTopo();
+  }
+}
+
+function atualizaTopo() {
+  if (!usuario) return;
+  $("nome-usuario").textContent = usuarioNome;
+  $("avatar-topo").innerHTML = htmlAvatar((cachePerfis[usuario.uid] || {}).foto, usuarioNome, "p");
+}
+
+// Reserva o nome de usuário e grava o perfil na mesma operação (ninguém consegue repetir o nome)
+async function reservaUsuario(uid, handle, dados) {
+  const refNome = db.collection("usernames").doc(handle);
+  const refPerfil = db.collection("users").doc(uid);
+  await db.runTransaction(async (t) => {
+    const snap = await t.get(refNome);
+    if (snap.exists) throw falha("Esse nome de usuário já está em uso.");
+    t.set(refNome, { uid });
+    t.set(refPerfil, { ...dados, usuario: handle }, { merge: true });
+  });
+}
+
+// Contas antigas (sem nome de usuário) são convidadas a completar o perfil
+async function garantePerfil() {
+  const u = auth.currentUser;
+  if (!u) return;
+  const ref = db.collection("users").doc(u.uid);
+  let d = {};
+  try {
+    const snap = await ref.get();
+    d = snap.exists ? snap.data() : {};
+  } catch (e) {
+    console.error(e);
+    return;
+  }
+  if (d.usuario) {
+    guardaPerfil(u.uid, d);
+    if ("email" in d || "emailLower" in d) {
+      // o e-mail deixou de ser necessário no perfil público
+      ref
+        .update({
+          email: firebase.firestore.FieldValue.delete(),
+          emailLower: firebase.firestore.FieldValue.delete()
+        })
+        .catch(() => {});
+    }
+    return;
+  }
+  cachePerfis[u.uid] = d;
+  abrePerfil(true);
+}
+
+let perfilObrigatorio = false;
+let fotoPerfil; // undefined = sem mudança, null = remover, texto = nova foto
+
+function perfilAtual() {
+  return (usuario && cachePerfis[usuario.uid]) || {};
+}
+
+function pintaFotoPerfil() {
+  const foto = fotoPerfil === undefined ? perfilAtual().foto : fotoPerfil;
+  $("perfil-prev").innerHTML = htmlAvatar(foto, $("perfil-nome").value.trim() || usuarioNome || "?", "g");
+  $("perfil-remover").hidden = !foto;
+}
+
+function abrePerfil(obrigatorio) {
+  if (!usuario) return;
+  const d = perfilAtual();
+  perfilObrigatorio = obrigatorio;
+  fotoPerfil = undefined;
+  $("perfil-titulo").textContent = obrigatorio ? "Complete seu perfil" : "Meu perfil";
+  $("perfil-obs").hidden = !obrigatorio;
+  $("perfil-nome").value = d.nome || usuario.displayName || "";
+  $("perfil-usuario").value = d.usuario || "";
+  $("perfil-usuario").disabled = !!d.usuario;
+  $("perfil-usuario-dica").textContent = d.usuario
+    ? "O nome de usuário não pode ser alterado."
+    : "Seus amigos te encontram por ele. Depois de escolhido, não dá para mudar.";
+  $("perfil-erro").textContent = "";
+  $("perfil-cancelar").hidden = obrigatorio;
+  pintaFotoPerfil();
+  if (!$("dlg-perfil").open) $("dlg-perfil").showModal();
+}
+
+async function salvarPerfil() {
+  const d = perfilAtual();
+  const nome = $("perfil-nome").value.trim();
+  const handle = d.usuario || $("perfil-usuario").value.trim().toLowerCase().replace(/^@/, "");
+  const erro = $("perfil-erro");
+  erro.textContent = "";
+
+  if (!nome) {
+    erro.textContent = "Digite seu nome.";
+    return;
+  }
+  if (!d.usuario && !REGEX_USUARIO.test(handle)) {
+    erro.textContent = MSG_USUARIO;
+    return;
+  }
+
+  const dados = { nome };
+  if (fotoPerfil === null) dados.foto = firebase.firestore.FieldValue.delete();
+  else if (typeof fotoPerfil === "string") dados.foto = fotoPerfil;
+
+  $("perfil-salvar").disabled = true;
+  try {
+    const ref = db.collection("users").doc(usuario.uid);
+    if (d.usuario) await ref.set(dados, { merge: true });
+    else await reservaUsuario(usuario.uid, handle, dados);
+
+    const snap = await ref.get();
+    guardaPerfil(usuario.uid, snap.data());
+    usuario.updateProfile({ displayName: nome }).catch(() => {});
+    perfilObrigatorio = false;
+    $("dlg-perfil").close();
+    renderGrupoAtual();
+    aviso("Perfil salvo.");
+  } catch (e) {
+    console.error(e);
+    erro.textContent = traduzErro(e);
+  } finally {
+    $("perfil-salvar").disabled = false;
+  }
+}
+
+$("btn-perfil").onclick = () => abrePerfil(false);
+$("perfil-salvar").onclick = salvarPerfil;
+$("perfil-cancelar").onclick = () => $("dlg-perfil").close();
+$("dlg-perfil").addEventListener("cancel", (ev) => {
+  if (perfilObrigatorio) ev.preventDefault(); // não deixa fechar com Esc enquanto falta o nome de usuário
+});
+$("perfil-escolher").onclick = () => $("perfil-arquivo").click();
+$("perfil-arquivo").onchange = async (ev) => {
+  const arq = ev.target.files[0];
+  ev.target.value = "";
+  if (!arq) return;
+  try {
+    fotoPerfil = await lerFoto(arq);
+    pintaFotoPerfil();
+  } catch (e) {
+    $("perfil-erro").textContent = traduzErro(e);
+  }
+};
+$("perfil-remover").onclick = () => {
+  fotoPerfil = null;
+  pintaFotoPerfil();
+};
+$("perfil-nome").addEventListener("input", pintaFotoPerfil);
+
+// ============================================================
+// AMIGOS
+// ============================================================
+function amigosUids() {
+  if (!usuario) return [];
+  return amizades.map((a) => a.uids.find((x) => x !== usuario.uid)).filter(Boolean);
+}
+
+function uidsSociais() {
+  return [...amigosUids(), ...pedidosRec.map((pd) => pd.de), ...pedidosEnv.map((pd) => pd.para)];
+}
+
+function pararSociais() {
+  cancelaSociais.forEach((f) => f());
+  cancelaSociais = [];
+  amizades = [];
+  pedidosRec = [];
+  pedidosEnv = [];
+}
+
+function sociaisMudaram() {
+  const n = pedidosRec.length;
+  $("badge-pedidos").hidden = n === 0;
+  $("badge-pedidos").textContent = n;
+  renderGrupoAtual();
+}
+
+function ouvirSociais() {
+  pararSociais();
+  const uid = usuario.uid;
+  const erro = (e) => aviso(traduzErro(e));
+  const docs = (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  cancelaSociais = [
+    db.collection("friendships").where("uids", "array-contains", uid).onSnapshot((s) => {
+      amizades = docs(s);
+      sociaisMudaram();
+    }, erro),
+    db.collection("friendRequests").where("para", "==", uid).onSnapshot((s) => {
+      pedidosRec = docs(s);
+      sociaisMudaram();
+    }, erro),
+    db.collection("friendRequests").where("de", "==", uid).onSnapshot((s) => {
+      pedidosEnv = docs(s);
+      sociaisMudaram();
+    }, erro)
+  ];
+}
+
+async function enviarPedido() {
+  const campo = $("amigo-usuario");
+  if (!campo) return;
+  const handle = campo.value.trim().toLowerCase().replace(/^@/, "");
+  if (!REGEX_USUARIO.test(handle)) {
+    aviso("Digite o nome de usuário do seu amigo.");
+    return;
+  }
+  try {
+    const s = await db.collection("usernames").doc(handle).get();
+    if (!s.exists) throw falha("Não encontrei ninguém com esse nome de usuário.");
+    const uid = s.data().uid;
+    const eu = usuario.uid;
+    if (uid === eu) throw falha("Esse é o seu próprio nome de usuário.");
+    if (amigosUids().includes(uid)) throw falha("Vocês já são amigos.");
+    if (pedidosRec.some((pd) => pd.de === uid)) {
+      throw falha('Essa pessoa já te enviou um pedido. Aceite em "Pedidos recebidos".');
+    }
+    if (pedidosEnv.some((pd) => pd.para === uid)) throw falha("Você já enviou um pedido para essa pessoa.");
+
+    await db
+      .collection("friendRequests")
+      .doc(`${eu}_${uid}`)
+      .set({ de: eu, para: uid, criadoEm: firebase.firestore.FieldValue.serverTimestamp() });
+    campo.value = "";
+    aviso("Pedido enviado.");
+  } catch (e) {
+    aviso(traduzErro(e));
+  }
+}
+
+async function aceitarPedido(rid) {
+  const pd = pedidosRec.find((x) => x.id === rid);
+  if (!pd) return;
+  try {
+    await db
+      .collection("friendships")
+      .doc(rid)
+      .set({
+        uids: [pd.de, pd.para],
+        de: pd.de,
+        para: pd.para,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    await db.collection("friendRequests").doc(rid).delete();
+    aviso(`Agora você e ${nomeDe(pd.de)} são amigos.`);
+  } catch (e) {
+    aviso(traduzErro(e));
+  }
+}
+
+async function apagarPedido(rid, mensagem) {
+  try {
+    await db.collection("friendRequests").doc(rid).delete();
+    aviso(mensagem);
+  } catch (e) {
+    aviso(traduzErro(e));
+  }
+}
+
+async function removerAmigo(uid) {
+  const a = amizades.find((x) => x.uids.includes(uid));
+  if (!a) return;
+  if (!confirm(`Remover ${nomeDe(uid)} dos seus amigos? Os grupos em comum continuam como estão.`)) return;
+  try {
+    await db.collection("friendships").doc(a.id).delete();
+    aviso("Amizade removida.");
+  } catch (e) {
+    aviso(traduzErro(e));
+  }
+}
+
+$("btn-amigos").onclick = () => {
+  mostrandoAmigos = true;
+  renderGrupos();
+  renderGrupoAtual();
+  if (window.innerWidth <= 760) $("conteudo").scrollIntoView({ behavior: "smooth" });
+};
