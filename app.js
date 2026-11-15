@@ -271,7 +271,8 @@ let usuario = null;
 let usuarioNome = "";
 let grupos = [];
 let grupoAtualId = null;
-let abaGrupo = "calls"; // "calls" ou "membros"
+let abaGrupo = "calls"; // "calls", "membros" ou "stats"
+let anoStats = null; // null = automático, "todos" ou um ano
 let callAtualId = null;
 let calls = [];
 let cancelaGrupos = null;
@@ -564,9 +565,9 @@ function htmlGrupo(grupo) {
     <div class="abas-grupo">
       ${aba("calls", "Calls")}
       ${aba("membros", "Membros")}
-      <span class="aba-g desativada">Estatísticas (em breve)</span>
+      ${aba("stats", "Estatísticas")}
     </div>
-    ${abaGrupo === "calls" ? htmlListaCalls() : htmlMembros(grupo)}
+    ${abaGrupo === "calls" ? htmlListaCalls() : abaGrupo === "membros" ? htmlMembros(grupo) : htmlStats()}
   `;
 }
 
@@ -1524,3 +1525,304 @@ $("btn-amigos").onclick = () => {
   renderGrupoAtual();
   if (window.innerWidth <= 760) $("conteudo").scrollIntoView({ behavior: "smooth" });
 };
+
+
+// ============================================================
+// ESTATÍSTICAS
+// ============================================================
+const PERIODOS = ["Madrugada (0h às 6h)", "Manhã (6h às 12h)", "Tarde (12h às 18h)", "Noite (18h às 24h)"];
+const DIAS_SEMANA = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+
+function diaNum(ms) {
+  const d = new Date(ms);
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+}
+
+// Junta intervalos que se sobrepõem (quem saiu e voltou não conta em dobro)
+function uniaoIntervalos(lista) {
+  const out = [];
+  lista
+    .slice()
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([a, b]) => {
+      const ult = out[out.length - 1];
+      if (ult && a <= ult[1]) ult[1] = Math.max(ult[1], b);
+      else out.push([a, b]);
+    });
+  return out;
+}
+
+const somaIntervalos = (l) => l.reduce((t, [a, b]) => t + (b - a), 0);
+
+function sobreposicao(l1, l2) {
+  let t = 0;
+  l1.forEach(([a, b]) =>
+    l2.forEach(([c, d]) => {
+      const x = Math.min(b, d) - Math.max(a, c);
+      if (x > 0) t += x;
+    })
+  );
+  return t;
+}
+
+// Reparte a duração da call entre madrugada, manhã, tarde e noite
+function porPeriodo(ini, fim, acc) {
+  let t = ini;
+  while (t < fim) {
+    const d = new Date(t);
+    const prox = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 1).getTime();
+    const fimTrecho = Math.min(prox, fim);
+    acc[Math.floor(d.getHours() / 6)] += fimTrecho - t;
+    t = Math.max(fimTrecho, t + 1);
+  }
+}
+
+function calcStats(lista) {
+  const agora = Date.now();
+  const r = {
+    calls: lista.length,
+    total: 0,
+    maior: null,
+    semJogo: 0,
+    momentos: 0,
+    semana: Array(7).fill(0),
+    semanaCalls: Array(7).fill(0),
+    periodos: [0, 0, 0, 0]
+  };
+  const jogos = new Map();
+  const pessoas = new Map();
+  const duplas = new Map();
+  const autores = new Map();
+  const dias = new Set();
+
+  lista.forEach((c) => {
+    const ini = c.inicio;
+    const fim = c.fim == null ? agora : c.fim;
+    const dur = Math.max(0, fim - ini);
+    r.total += dur;
+    if (!r.maior || dur > r.maior.dur) r.maior = { c, dur };
+
+    const d0 = diaNum(ini);
+    const d1 = Math.min(diaNum(fim), d0 + 2);
+    for (let d = d0; d <= d1; d++) dias.add(d);
+
+    r.semana[new Date(ini).getDay()] += dur;
+    r.semanaCalls[new Date(ini).getDay()] += 1;
+    porPeriodo(ini, fim, r.periodos);
+
+    // jogos
+    let tempoJogo = 0;
+    (c.jogos || []).forEach((j) => {
+      const t = Math.max(0, (j.fim == null ? fim : j.fim) - j.inicio);
+      const chave = j.nome.trim().toLowerCase();
+      const g = jogos.get(chave) || { nome: j.nome.trim(), tempo: 0, calls: new Set() };
+      g.tempo += t;
+      g.calls.add(c.id);
+      jogos.set(chave, g);
+      tempoJogo += t;
+    });
+    r.semJogo += Math.max(0, dur - tempoJogo);
+
+    // pessoas
+    const intervalos = new Map();
+    const nomes = {};
+    (c.participantes || []).forEach((s) => {
+      const a = s.entrou;
+      const b = s.saiu == null ? fim : s.saiu;
+      nomes[s.uid] = s.nome;
+      if (b <= a) return;
+      const lista2 = intervalos.get(s.uid) || [];
+      lista2.push([a, b]);
+      intervalos.set(s.uid, lista2);
+    });
+    const uni = new Map();
+    intervalos.forEach((iv, uid) => {
+      const m = uniaoIntervalos(iv);
+      uni.set(uid, m);
+      const pe = pessoas.get(uid) || { uid, nome: nomes[uid], tempo: 0, calls: 0 };
+      pe.tempo += somaIntervalos(m);
+      pe.calls += 1;
+      pe.nome = nomes[uid];
+      pessoas.set(uid, pe);
+    });
+
+    // duplas
+    const uids = [...uni.keys()];
+    for (let i = 0; i < uids.length; i++) {
+      for (let k = i + 1; k < uids.length; k++) {
+        const juntos = sobreposicao(uni.get(uids[i]), uni.get(uids[k]));
+        if (juntos <= 0) continue;
+        const [x, y] = [uids[i], uids[k]].sort();
+        const chave = x + "|" + y;
+        const du = duplas.get(chave) || { a: x, b: y, nomeA: nomes[x], nomeB: nomes[y], tempo: 0, calls: 0 };
+        du.tempo += juntos;
+        du.calls += 1;
+        duplas.set(chave, du);
+      }
+    }
+
+    // momentos
+    (c.momentos || []).forEach((m) => {
+      r.momentos += 1;
+      const a = autores.get(m.autorId) || { uid: m.autorId, nome: m.autorNome, n: 0 };
+      a.n += 1;
+      autores.set(m.autorId, a);
+    });
+  });
+
+  // maior sequência de dias seguidos com call
+  let seq = 0;
+  let melhor = 0;
+  let anterior = null;
+  [...dias]
+    .sort((a, b) => a - b)
+    .forEach((d) => {
+      seq = anterior !== null && d === anterior + 1 ? seq + 1 : 1;
+      melhor = Math.max(melhor, seq);
+      anterior = d;
+    });
+
+  r.dias = dias.size;
+  r.sequencia = melhor;
+  r.jogos = [...jogos.values()].sort((a, b) => b.tempo - a.tempo);
+  r.pessoas = [...pessoas.values()].sort((a, b) => b.tempo - a.tempo);
+  r.duplas = [...duplas.values()].sort((a, b) => b.tempo - a.tempo);
+  r.autores = [...autores.values()].sort((a, b) => b.n - a.n);
+  return r;
+}
+
+function barra(rotuloHtml, valor, max, texto) {
+  const pct = max > 0 && valor > 0 ? Math.max(2, (valor / max) * 100) : 0;
+  return `
+    <li class="barra-linha">
+      <div class="barra-rotulo">${rotuloHtml}</div>
+      <div class="barra"><span style="width:${pct.toFixed(1)}%"></span></div>
+      <div class="barra-valor">${esc(texto)}</div>
+    </li>`;
+}
+
+function secaoBarras(titulo, linhas) {
+  return linhas ? `<h3>${esc(titulo)}</h3><ul class="barras">${linhas}</ul>` : "";
+}
+
+function htmlStats() {
+  if (!calls.length) {
+    return '<p class="vazio">As estatísticas aparecem depois da primeira call registrada.</p>';
+  }
+
+  const anos = [...new Set(calls.map((c) => new Date(c.inicio).getFullYear()))].sort((a, b) => b - a);
+  const anoAtual = new Date().getFullYear();
+  let ano = anoStats;
+  if (ano === null || (ano !== "todos" && !anos.includes(ano))) {
+    ano = anos.includes(anoAtual) ? anoAtual : "todos";
+  }
+  const lista = ano === "todos" ? calls : calls.filter((c) => new Date(c.inicio).getFullYear() === ano);
+  const st = calcStats(lista);
+
+  const opcoes =
+    `<option value="todos" ${ano === "todos" ? "selected" : ""}>Todos os anos</option>` +
+    anos.map((a) => `<option value="${a}" ${a === ano ? "selected" : ""}>${a}</option>`).join("");
+
+  const av = (uid, nome) => htmlAvatar((cachePerfis[uid] || {}).foto, nome, "p");
+  const card = (rotulo, valor, sub, destaque) => `
+    <div class="stat-card ${destaque ? "destaque" : ""}">
+      <div class="stat-rot">${esc(rotulo)}</div>
+      <div class="stat-num">${esc(valor)}</div>
+      ${sub ? `<div class="stat-sub">${esc(sub)}</div>` : ""}
+    </div>`;
+
+  const veze = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+  const media = st.calls ? st.total / st.calls : 0;
+  const topJogo = st.jogos[0];
+  const topPessoa = st.pessoas[0];
+  const pctConversa = st.total ? Math.round((st.semJogo / st.total) * 100) : 0;
+
+  const cards = [
+    card("Tempo total em call", fmtDur(st.total), veze(st.calls, "call", "calls"), true),
+    card("Duração média", fmtDur(media), "por call"),
+    card(
+      "Call mais longa",
+      st.maior ? fmtDur(st.maior.dur) : "-",
+      st.maior ? `${tituloCall(st.maior.c)}` : ""
+    ),
+    card("Jogos diferentes", String(st.jogos.length), topJogo ? "" : "Nenhum jogo registrado"),
+    card("Jogo mais jogado", topJogo ? topJogo.nome : "-", topJogo ? fmtDur(topJogo.tempo) : ""),
+    card("Quem mais participou", topPessoa ? topPessoa.nome : "-", topPessoa ? fmtDur(topPessoa.tempo) : ""),
+    card("Dias com call", String(st.dias), `maior sequência: ${veze(st.sequencia, "dia seguido", "dias seguidos")}`),
+    card("Só conversando", fmtDur(st.semJogo), `${pctConversa}% do tempo, sem jogo registrado`),
+    card("Momentos anotados", String(st.momentos), "frases e acontecimentos")
+  ].join("");
+
+  // rankings
+  const maxJogo = st.jogos.length ? st.jogos[0].tempo : 0;
+  const linhasJogos = st.jogos
+    .slice(0, 10)
+    .map((g) => barra(esc(g.nome), g.tempo, maxJogo, `${fmtDur(g.tempo)} em ${veze(g.calls.size, "call", "calls")}`))
+    .join("");
+
+  const maxPessoa = topPessoa ? topPessoa.tempo : 0;
+  const linhasPessoas = st.pessoas
+    .map((pe) =>
+      barra(
+        `${av(pe.uid, pe.nome)}<span>${esc(pe.nome)}</span>`,
+        pe.tempo,
+        maxPessoa,
+        `${fmtDur(pe.tempo)} em ${pe.calls} de ${st.calls} ${st.calls === 1 ? "call" : "calls"}`
+      )
+    )
+    .join("");
+
+  const maxDupla = st.duplas.length ? st.duplas[0].tempo : 0;
+  const linhasDuplas = st.duplas
+    .slice(0, 5)
+    .map((d) =>
+      barra(
+        `${av(d.a, d.nomeA)}${av(d.b, d.nomeB)}<span>${esc(d.nomeA)} e ${esc(d.nomeB)}</span>`,
+        d.tempo,
+        maxDupla,
+        `${fmtDur(d.tempo)} juntos`
+      )
+    )
+    .join("");
+
+  const ordemSemana = [1, 2, 3, 4, 5, 6, 0];
+  const maxSemana = Math.max(...st.semana);
+  const linhasSemana = ordemSemana
+    .map((d) => barra(esc(DIAS_SEMANA[d]), st.semana[d], maxSemana, `${fmtDur(st.semana[d])} (${veze(st.semanaCalls[d], "call", "calls")})`))
+    .join("");
+
+  const maxPeriodo = Math.max(...st.periodos);
+  const linhasPeriodos = PERIODOS.map((nome, i) => barra(esc(nome), st.periodos[i], maxPeriodo, fmtDur(st.periodos[i]))).join("");
+
+  const maxAutor = st.autores.length ? st.autores[0].n : 0;
+  const linhasAutores = st.autores
+    .slice(0, 5)
+    .map((a) => barra(`${av(a.uid, a.nome)}<span>${esc(a.nome)}</span>`, a.n, maxAutor, veze(a.n, "anotação", "anotações")))
+    .join("");
+
+  const aviso2 = lista.some((c) => c.fim == null)
+    ? '<p class="vazio">Há uma call em andamento: o tempo dela conta até agora.</p>'
+    : "";
+
+  return `
+    <label class="filtro-ano">Período
+      <select id="stats-ano">${opcoes}</select>
+    </label>
+    ${aviso2}
+    <div class="stats-grid">${cards}</div>
+    ${secaoBarras("Ranking de jogos (por tempo jogado)", linhasJogos)}
+    ${secaoBarras("Quem mais ficou em call", linhasPessoas)}
+    ${secaoBarras("Duplas que mais ficam juntas", linhasDuplas)}
+    ${secaoBarras("Dia da semana em que mais fazem call", linhasSemana)}
+    ${secaoBarras("Horário em que mais fazem call", linhasPeriodos)}
+    ${secaoBarras("Quem mais anota momentos", linhasAutores)}
+  `;
+}
+
+$("conteudo").addEventListener("change", (ev) => {
+  if (ev.target.id === "stats-ano") {
+    const v = ev.target.value;
+    anoStats = v === "todos" ? "todos" : Number(v);
+    renderGrupoAtual();
+  }
+});

@@ -446,6 +446,58 @@ select, textarea {
 .dialogo .form input { margin: 0; width: 100%; }
 .dialogo .form input:disabled { opacity: 0.6; }
 
+/* ---------- Estatísticas ---------- */
+.filtro-ano { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.stat-card {
+  background: var(--painel);
+  border: 1px solid var(--linha);
+  border-radius: var(--raio);
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.stat-card.destaque { border-color: var(--destaque); }
+.stat-rot { color: var(--suave); font-size: 0.85rem; }
+
+.stat-num {
+  font-family: "Bricolage Grotesque", "DM Sans", sans-serif;
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.stat-card.destaque .stat-num { color: var(--destaque); }
+.stat-sub { color: var(--suave); font-size: 0.85rem; overflow-wrap: anywhere; }
+
+.barras { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+
+.barra-linha {
+  display: grid;
+  grid-template-columns: minmax(130px, 220px) 1fr minmax(120px, auto);
+  align-items: center;
+  gap: 12px;
+}
+
+.barra-rotulo { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.barra-rotulo span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barra { background: var(--painel); border: 1px solid var(--linha); border-radius: 99px; height: 14px; overflow: hidden; }
+.barra span { display: block; height: 100%; background: var(--destaque); border-radius: 99px; }
+.barra-valor { color: var(--suave); font-size: 0.85rem; text-align: right; }
+
+@media (max-width: 760px) {
+  .barra-linha { grid-template-columns: 1fr; gap: 4px; }
+  .barra-valor { text-align: left; }
+}
+
 /* ---------- Celular ---------- */
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; }
